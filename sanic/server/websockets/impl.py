@@ -24,6 +24,10 @@ from sanic.log import websockets_logger
 from sanic.server.protocols.base_protocol import SanicProtocol
 
 from ...exceptions import ServerError, WebsocketClosed
+from .authorization import (
+    WebsocketAuthorizationMixin,
+    WebsocketAuthorizationState,
+)
 from .frame import WebsocketFrameAssembler
 
 
@@ -32,7 +36,9 @@ CLOSING = State.CLOSING
 CLOSED = State.CLOSED
 
 
-class WebsocketImplProtocol:
+class WebsocketImplProtocol(WebsocketAuthorizationMixin):
+    supports_synchronous_close = True
+
     ws_proto: ServerProtocol
     io_proto: SanicProtocol | None
     loop: asyncio.AbstractEventLoop | None
@@ -56,6 +62,7 @@ class WebsocketImplProtocol:
     connection_lost_waiter: asyncio.Future | None
     keepalive_ping_task: asyncio.Task | None
     auto_closer_task: asyncio.Task | None
+    authorization_state: WebsocketAuthorizationState
 
     def __init__(
         self,
@@ -85,6 +92,7 @@ class WebsocketImplProtocol:
         self.keepalive_ping_task = None
         self.auto_closer_task = None
         self.connection_lost_waiter = None
+        self.authorization_state = WebsocketAuthorizationState(self)
 
     @property
     def subprotocol(self):

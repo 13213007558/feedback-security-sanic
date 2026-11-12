@@ -676,3 +676,54 @@ class WebsocketClosed(SanicException):
 
     quiet = True
     message = "Client has closed the websocket connection"
+
+
+class WebsocketAuthorizationError(SanicException):
+    """Base class for websocket authorization failures.
+
+    These errors are quiet by default because a revoked authorization is an
+    expected application event, not a programming error. They carry the
+    websocket close code and reason that Sanic uses to terminate the
+    connection after a protected action has been refused.
+
+    The supplied ``reason`` is also copied to ``close_reason`` so callers can
+    read either attribute without relying on the constructor internals.
+    """
+
+    quiet = True
+    message = "Websocket authorization failed"
+    close_code: int = 1008
+    close_reason: str = "Authorization revoked"
+
+    def __init__(
+        self,
+        message: str | bytes | None = None,
+        *,
+        close_code: int | None = None,
+        reason: str | None = None,
+        quiet: bool | None = None,
+    ) -> None:
+        super().__init__(message, quiet=quiet)
+        self.close_code = (
+            close_code if close_code is not None else self.close_code
+        )
+        self.reason = reason if reason is not None else self.close_reason
+        self.close_reason = self.reason
+
+
+class WebsocketAuthorizationRequired(WebsocketAuthorizationError):
+    """Raised when a protected action is attempted without authorization."""
+
+    message = "Websocket connection has no authorization context"
+
+
+class WebsocketAuthorizationRevoked(WebsocketAuthorizationError):
+    """Raised when a protected action uses a revoked authorization
+
+    The authorization generation attached to the connection no longer
+    matches the application's current generation for that account. New
+    protected actions must not start; actions that were already admitted may
+    still complete.
+    """
+
+    message = "Websocket authorization has been revoked"

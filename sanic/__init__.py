@@ -22,6 +22,9 @@ from sanic.exceptions import (
     ServerError,
     ServiceUnavailable,
     Unauthorized,
+    WebsocketAuthorizationError,
+    WebsocketAuthorizationRequired,
+    WebsocketAuthorizationRevoked,
 )
 from sanic.request import Request
 from sanic.response import (
@@ -75,6 +78,9 @@ __all__ = (
     "ServerError",
     "ServiceUnavailable",
     "Unauthorized",
+    "WebsocketAuthorizationError",
+    "WebsocketAuthorizationRequired",
+    "WebsocketAuthorizationRevoked",
     # Common response methods
     "empty",
     "file",

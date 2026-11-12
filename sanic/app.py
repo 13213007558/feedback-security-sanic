@@ -56,6 +56,7 @@ from sanic.exceptions import (
     SanicException,
     ServerError,
     URLBuildError,
+    WebsocketAuthorizationError,
 )
 from sanic.handlers import ErrorHandler
 from sanic.helpers import Default, _default
@@ -82,6 +83,10 @@ from sanic.models.handler_types import Sanic as SanicVar
 from sanic.request import Request
 from sanic.response import BaseHTTPResponse, HTTPResponse, ResponseStream
 from sanic.router import Router
+from sanic.server.websockets.authorization import (
+    WebsocketAuthorization,
+    WebsocketAuthorizationManager,
+)
 from sanic.server.websockets.impl import ConnectionClosed
 from sanic.signals import Event, Signal, SignalRouter
 from sanic.touchup import TouchUp, TouchUpMeta
@@ -217,6 +222,7 @@ class Sanic(
         "signal_router",
         "sock",
         "strict_slashes",
+        "websocket_authorizations",
         "websocket_enabled",
         "websocket_tasks",
     )
@@ -381,6 +387,7 @@ class Sanic(
         self.signal_router: SignalRouter = signal_router or SignalRouter()
         self.sock: socket | None = None
         self.strict_slashes: bool = strict_slashes
+        self.websocket_authorizations = WebsocketAuthorizationManager(self)
         self.websocket_enabled: bool = False
         self.websocket_tasks: set[Future[Any]] = set()
 
@@ -845,6 +852,75 @@ class Sanic(
             self.listener("before_server_stop")(self._cancel_websocket_tasks)
 
         self.websocket_enabled = enable
+
+    def set_websocket_authorizer(self, authorizer=None) -> None:
+        """Install an application hook that re-confirms websocket access.
+
+        The callable receives the per-connection
+        :class:`~sanic.server.websockets.authorization.WebsocketAuthorizationState`  # noqa: E501
+        and may be a coroutine. It can return a fresh
+        :class:`~sanic.server.websockets.authorization.WebsocketAuthorization`,  # noqa: E501
+        a generation ``int``, ``True`` to accept the manager's current
+        generation, or ``False``/``None`` to refuse. The hook is consulted
+        immediately before a protected action executes; it is not re-run for
+        an action that was already admitted.
+
+        Args:
+            authorizer (Callable | None): The re-confirmation hook. Pass
+                ``None`` to remove it.
+        """
+
+        self.websocket_authorizations.set_revalidator(authorizer)
+
+    def authorize_websocket(
+        self,
+        account: str,
+        *,
+        generation: int | None = None,
+        claims: dict | None = None,
+    ) -> WebsocketAuthorization:
+        """Confirm (or re-confirm) an account's websocket authorization.
+
+        A new generation is issued unless ``generation`` is provided. Every
+        websocket bound to an older generation is refused on its next
+        protected message, while actions already admitted may finish.
+
+        Args:
+            account (str): The account the connection belongs to.
+            generation (Optional[int]): Explicit generation value.
+            claims (Optional[dict]): Application data copied into the
+                immutable snapshot.
+
+        Returns:
+            WebsocketAuthorization: The issued snapshot.
+        """
+
+        return self.websocket_authorizations.issue(
+            account, generation=generation, claims=claims
+        )
+
+    def revoke_websocket(
+        self,
+        account: str,
+        *,
+        claims: dict | None = None,
+    ) -> WebsocketAuthorization:
+        """Revoke an account's websocket authorization.
+
+        All websocket connections bound to the account stop admitting new
+        protected actions. Connections decide individually whether to close,
+        so one connection does not overwrite another's processing state.
+
+        Args:
+            account (str): The account to revoke.
+            claims (Optional[dict]): Application data copied into the
+                snapshot.
+
+        Returns:
+            WebsocketAuthorization: The revoked snapshot.
+        """
+
+        return self.websocket_authorizations.revoke(account, claims=claims)
 
     def blueprint(
         self,
@@ -1442,6 +1518,10 @@ class Sanic(
             protocol = request.transport.get_protocol()
             ws = await protocol.websocket_handshake(request, subprotocols)
 
+        state = ws.authorization_state
+        state.attach_manager(self.websocket_authorizations)
+        state.attach_request(request, ws)
+
         await self.dispatch(
             "websocket.handler.before",
             inline=True,
@@ -1454,6 +1534,7 @@ class Sanic(
         fut = ensure_future(handler(request, ws, *args, **kwargs))
         self.websocket_tasks.add(fut)
         cancelled = False
+        rejection: Exception | None = None
         try:
             await fut
             await self.dispatch(
@@ -1466,6 +1547,9 @@ class Sanic(
         except (CancelledError, ConnectionClosed):  # type: ignore
             cancelled = True
         except Exception as e:
+            rejection = (
+                e if isinstance(e, WebsocketAuthorizationError) else None
+            )
             self.error_handler.log(request, e)
             await self.dispatch(
                 "websocket.handler.exception",
@@ -1478,6 +1562,14 @@ class Sanic(
             self.websocket_tasks.remove(fut)
             if cancelled:
                 ws.end_connection(1000)
+            elif rejection is not None:
+                if not state.close_handled:
+                    await state.close_connection(
+                        getattr(rejection, "close_code", None)
+                        or state.close_code,
+                        getattr(rejection, "reason", None)
+                        or state.close_reason,
+                    )
             else:
                 await ws.close()
 
