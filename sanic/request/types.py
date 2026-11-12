@@ -906,6 +906,18 @@ class Request(Generic[sanic_type, ctx_type]):
     # Proxy properties (using SERVER_NAME/forwarded/request/transport info)
 
     @property
+    def security_policy(self):
+        """The policy snapshot pinned to this request, if any.
+
+        Admission pins exactly one snapshot before handlers run. Proxy and
+        authentication fields read during the rest of the lifecycle come from
+        that snapshot only, never from a mix of generations.
+        """
+        from sanic.security import policy_from_request
+
+        return policy_from_request(self)
+
+    @property
     def forwarded(self) -> Options:
         """Active proxy information obtained from request headers, as specified in Sanic configuration.
 
@@ -920,9 +932,15 @@ class Request(Generic[sanic_type, ctx_type]):
             Options: proxy information from request headers
         """  # noqa: E501
         if self.parsed_forwarded is None:
+            policy = self.security_policy
+            config = (
+                policy.forwarded_config
+                if policy is not None
+                else self.app.config
+            )
             self.parsed_forwarded = (
-                parse_forwarded(self.headers, self.app.config)
-                or parse_xforwarded(self.headers, self.app.config)
+                parse_forwarded(self.headers, config)
+                or parse_xforwarded(self.headers, config)
                 or {}
             )
         return self.parsed_forwarded

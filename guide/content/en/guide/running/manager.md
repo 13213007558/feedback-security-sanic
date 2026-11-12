@@ -445,6 +445,17 @@ Custom processes are usually added in the `main_process_ready` listener. However
     
 *Added in v23.12*
 
+## Security policy generations
+
+Proxy trust and authentication settings are read field by field. If they are
+changed while workers are running, one request could otherwise read a new
+`PROXIES_COUNT` but an old `REAL_IP_HEADER`, or authenticate against a token
+that no longer belongs to the configured scheme set.
+
+Sanic therefore treats these fields as one immutable, generation-tagged
+snapshot. See [Security policy generations](./security-policy.md) for the
+rollout protocol, old-connection rules, and the operator-visible output format.
+
 ## Single process mode
 
 .. column::

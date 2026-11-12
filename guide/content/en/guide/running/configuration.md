@@ -290,6 +290,11 @@ If a value cannot be cast, it will default to a `str`.
 | REQUEST_MAX_HEADER_SIZE   | 8192            | How big a request header may be (bytes), default is 8192 bytes                                                                         |
 | REQUEST_TIMEOUT           | 60               | How long a request can take to arrive (sec)                                                                                           |
 | RESPONSE_TIMEOUT          | 60               | How long a response can take to process (sec)                                                                                         |
+| SECURITY_AUTH_REQUIRED    | False            | Whether requests must present the configured auth token (see [policy generations](./security-policy.md))                             |
+| SECURITY_AUTH_SCHEMES     | Bearer, Token    | Accepted authentication scheme names                                                                                                  |
+| SECURITY_AUTH_TOKEN       | None             | Expected token when `SECURITY_AUTH_REQUIRED` is true                                                                                  |
+| SECURITY_OLD_CONNECTION_POLICY | pin          | `pin` keeps an old connection on its generation; `revalidate` re-admits it under the active generation                               |
+| SECURITY_POLICY_ENABLED   | False            | Enable generation-based request admission                                                                                             |
 | USE_UVLOOP                | True             | Whether to override the loop policy to use `uvloop`. Supported only with `app.run`.                                                   |
 | WEBSOCKET_MAX_SIZE        | 2^20             | Maximum size for incoming messages (bytes)                                                                                            |
 | WEBSOCKET_PING_INTERVAL   | 20               | A Ping frame is sent every ping_interval seconds.                                                                                     |

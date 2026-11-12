@@ -55,6 +55,8 @@ from sanic.exceptions import (
     BadRequest,
     SanicException,
     ServerError,
+    ServiceUnavailable,
+    Unauthorized,
     URLBuildError,
 )
 from sanic.handlers import ErrorHandler
@@ -82,6 +84,10 @@ from sanic.models.handler_types import Sanic as SanicVar
 from sanic.request import Request
 from sanic.response import BaseHTTPResponse, HTTPResponse, ResponseStream
 from sanic.router import Router
+from sanic.security import (
+    PolicyAuthorizationFailed,
+    PolicyNotActive,
+)
 from sanic.server.websockets.impl import ConnectionClosed
 from sanic.signals import Event, Signal, SignalRouter
 from sanic.touchup import TouchUp, TouchUpMeta
@@ -192,6 +198,7 @@ class Sanic(
         "_future_statics",
         "_inspector",
         "_manager",
+        "_security_policy",
         "_state",
         "_task_registry",
         "_test_client",
@@ -1288,6 +1295,20 @@ class Sanic(
             ServerError: response 500.
         """
         __tracebackhide__ = True
+
+        runtime = self._security_runtime()
+        if runtime is not None and runtime.enabled:
+            try:
+                runtime.pin_request(request)
+            except PolicyNotActive:
+                raise ServiceUnavailable(
+                    "Security policy is not active"
+                ) from None
+            except PolicyAuthorizationFailed:
+                raise Unauthorized(
+                    "Request rejected by the security policy",
+                    scheme="Bearer",
+                ) from None
 
         await self.dispatch(
             "http.lifecycle.handle",
@@ -2399,6 +2420,7 @@ class Sanic(
             if self.config.TOUCHUP:
                 TouchUp.run(self)
 
+        self._setup_security_policy()
         self.state.is_started = True
 
     def ack(self) -> None:
@@ -2409,7 +2431,73 @@ class Sanic(
         ready to begin operation.
         """
         if hasattr(self, "multiplexer"):
-            self.multiplexer.ack()
+            runtime = self._security_runtime()
+            if runtime is None or not runtime.enabled:
+                self.multiplexer.ack()
+            else:
+                self.multiplexer.ack(
+                    security_generation=runtime.generation,
+                    security_ready=True,
+                )
+
+    def _security_runtime(self):
+        """Return the worker-local security policy runtime, if configured."""
+        return getattr(self, "_security_policy", None)
+
+    def _setup_security_policy(self) -> None:
+        """Validate the configured policy and create the worker runtime.
+
+        Validation happens before the worker acknowledges readiness and
+        before the server accepts requests. A bad policy therefore fails
+        startup instead of admitting requests under an untrusted generation.
+        """
+        from sanic.security import (
+            SecurityPolicyRuntime,
+            SecurityPolicySnapshot,
+            SecurityPolicyValidationError,
+            fields_from_config,
+        )
+
+        generation = 0
+        try:
+            snapshot = SecurityPolicySnapshot.build(
+                generation, fields_from_config(self.config)
+            )
+        except SecurityPolicyValidationError as e:
+            raise SanicException(
+                f"Invalid security policy: {e}", status_code=500
+            ) from None
+
+        existing = self._security_runtime()
+        if existing is not None and existing.active.fields == snapshot.fields:
+            return
+        enabled = bool(getattr(self.config, "SECURITY_POLICY_ENABLED", False))
+        self._security_policy = SecurityPolicyRuntime(
+            snapshot,
+            enabled=enabled,
+            name=environ.get("SANIC_WORKER_NAME", ""),
+        )
+
+    @property
+    def security_status(self) -> dict[str, Any]:
+        """Operator-facing policy state.
+
+        The result intentionally contains only the generation and lifecycle
+        state. Policy values and secrets are never included.
+        """
+        runtime = self._security_runtime()
+        if runtime is None:
+            return {"generation": 0, "status": "disabled", "workers": []}
+        return {
+            "generation": runtime.generation,
+            "status": "active" if runtime.enabled else "disabled",
+            "workers": [
+                {
+                    "name": runtime.name or "worker",
+                    "status": "active" if runtime.enabled else "inactive",
+                }
+            ],
+        }
 
     def set_serving(self, serving: bool) -> None:
         """Set the serving state of the application.

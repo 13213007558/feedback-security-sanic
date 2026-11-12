@@ -59,6 +59,11 @@ DEFAULT_CONFIG = {
     "PROXIES_COUNT": None,
     "REAL_IP_HEADER": None,
     "REQUEST_BUFFER_SIZE": 65536,
+    "SECURITY_AUTH_REQUIRED": False,
+    "SECURITY_AUTH_SCHEMES": ("Bearer", "Token"),
+    "SECURITY_AUTH_TOKEN": None,  # nosec B105
+    "SECURITY_OLD_CONNECTION_POLICY": "pin",
+    "SECURITY_POLICY_ENABLED": False,
     "REQUEST_MAX_HEADER_SIZE": 8192,  # Cannot exceed 16384
     "REQUEST_ID_HEADER": "X-Request-ID",
     "REQUEST_MAX_SIZE": 100_000_000,
@@ -169,6 +174,11 @@ class Config(dict, metaclass=DescriptorMeta):
     REQUEST_MAX_SIZE: int
     REQUEST_TIMEOUT: int
     RESPONSE_TIMEOUT: int
+    SECURITY_AUTH_REQUIRED: bool
+    SECURITY_AUTH_SCHEMES: tuple[str, ...]
+    SECURITY_AUTH_TOKEN: str | None
+    SECURITY_OLD_CONNECTION_POLICY: str
+    SECURITY_POLICY_ENABLED: bool
     SERVER_NAME: str
     TLS_CERT_PASSWORD: str
     TOUCHUP: Default | bool

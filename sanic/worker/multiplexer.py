@@ -28,18 +28,32 @@ class WorkerMultiplexer:
         self._monitor_publisher = monitor_publisher
         self._state = WorkerState(worker_state, self.name)
 
-    def ack(self):
-        """Acknowledge the worker is ready."""
+    def ack(
+        self,
+        *,
+        security_generation: int | None = None,
+        security_ready: bool | None = None,
+    ):
+        """Acknowledge the worker is ready.
+
+        When a security policy is in use, the acknowledgement carries only
+        the generation and readiness state the worker validated. Secret
+        values never enter worker state.
+        """
         logger.debug(
             f"{Colors.BLUE}Process ack: {Colors.BOLD}{Colors.SANIC}"
             f"%s {Colors.BLUE}[%s]{Colors.END}",
             self.name,
             self.pid,
         )
-        self._state._state[self.name] = {
+        ack = {
             **self._state._state[self.name],
             "state": ProcessState.ACKED.name,
         }
+        if security_generation is not None:
+            ack["security_generation"] = security_generation
+            ack["security_status"] = "active" if security_ready else "inactive"
+        self._state._state[self.name] = ack
 
     def manage(
         self,

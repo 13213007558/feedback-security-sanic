@@ -71,6 +71,8 @@ root:
                   path: guide/running/app-loader.html
                 - label: Inspector
                   path: guide/running/inspector.html
+                - label: Security Policy Generations
+                  path: guide/running/security-policy.html
           - label: Deployment
             items:
                 - label: Caddy

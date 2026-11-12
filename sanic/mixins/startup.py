@@ -652,6 +652,10 @@ class StartupMixin(metaclass=SanicMeta):
                 "#proxy-configuration"
             )
 
+        # Validate the complete policy before any socket is bound or worker
+        # spawned. A bad candidate therefore never reaches request handling.
+        self._setup_security_policy()
+
         if not self.state.is_debug:
             self.state.mode = Mode.DEBUG if debug else Mode.PRODUCTION
 
@@ -1092,6 +1096,25 @@ class StartupMixin(metaclass=SanicMeta):
                 "config": {
                     "ACCESS_LOG": app.config.ACCESS_LOG,
                     "NOISY_EXCEPTIONS": app.config.NOISY_EXCEPTIONS,
+                    "SECURITY_AUTH_REQUIRED": (
+                        app.config.SECURITY_AUTH_REQUIRED
+                    ),
+                    "SECURITY_AUTH_SCHEMES": (
+                        app.config.SECURITY_AUTH_SCHEMES
+                    ),
+                    "SECURITY_AUTH_TOKEN": app.config.SECURITY_AUTH_TOKEN,
+                    "SECURITY_OLD_CONNECTION_POLICY": (
+                        app.config.SECURITY_OLD_CONNECTION_POLICY
+                    ),
+                    "SECURITY_POLICY_ENABLED": (
+                        app.config.SECURITY_POLICY_ENABLED
+                    ),
+                    "FORWARDED_FOR_HEADER": (
+                        app.config.FORWARDED_FOR_HEADER
+                    ),
+                    "FORWARDED_SECRET": app.config.FORWARDED_SECRET,
+                    "PROXIES_COUNT": app.config.PROXIES_COUNT,
+                    "REAL_IP_HEADER": app.config.REAL_IP_HEADER,
                 },
                 "shared_ctx": app.shared_ctx.__dict__,
             }
@@ -1117,6 +1140,7 @@ class StartupMixin(metaclass=SanicMeta):
                 cls._get_context(),
                 (monitor_pub, monitor_sub),
                 worker_state,
+                security_enabled=bool(primary.config.SECURITY_POLICY_ENABLED),
             )
             if cls.should_auto_reload():
                 reload_dirs: set[Path] = primary.state.reload_dirs.union(

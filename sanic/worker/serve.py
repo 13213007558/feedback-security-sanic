@@ -116,6 +116,11 @@ def worker_serve(
         if config:
             app.update_config(config)
 
+        # The worker process does not go through the startup helper, so the
+        # policy is validated and installed here, before the server binds or
+        # acknowledges readiness.
+        app._setup_security_policy()
+
         if version is HTTP.VERSION_3:
             return _serve_http_3(host, port, app, loop, ssl)
         return _serve_http_1(

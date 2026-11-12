@@ -29,6 +29,27 @@ else:
     SIGKILL = SIGINT
 
 
+def _security_confirmed(
+    worker_state: MutableMapping[str, Any], required: bool = False
+) -> bool:
+    """Whether a server worker acknowledged an enabled security generation.
+
+    A worker that reports a policy generation must also report that it is
+    ready to admit requests under it. Generation-only or status-only
+    acknowledgements are treated as unconfirmed so a partially configured
+    worker never becomes part of the serving pool. When a policy is enabled
+    for the deployment, a missing acknowledgement is also unconfirmed.
+    """
+    if "security_generation" not in worker_state:
+        return not required
+    if "security_status" not in worker_state:
+        return False
+    return (
+        isinstance(worker_state["security_generation"], int)
+        and worker_state["security_status"] == "active"
+    )
+
+
 class MonitorCycle(IntEnum):
     BREAK = auto()
     CONTINUE = auto()
@@ -70,9 +91,11 @@ class WorkerManager:
         context: BaseContext,
         monitor_pubsub: tuple[Connection[Any, Any], Connection[Any, Any]],
         worker_state: MutableMapping[str, Any],
+        security_enabled: bool = False,
     ):
         self.num_server = number
         self.context = context
+        self.security_enabled = security_enabled
         self.transient: dict[str, Worker] = {}
         self.durable: dict[str, Worker] = {}
         self.restarter = Restarter()
@@ -433,6 +456,9 @@ class WorkerManager:
     def _all_workers_ack(self):
         acked = [
             worker_state.get("state") == ProcessState.ACKED.name
+            and _security_confirmed(
+                worker_state, self.security_enabled
+            )
             for worker_state in self.worker_state.values()
             if worker_state.get("server")
         ]
