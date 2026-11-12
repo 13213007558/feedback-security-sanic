@@ -83,7 +83,7 @@ from sanic.request import Request
 from sanic.response import BaseHTTPResponse, HTTPResponse, ResponseStream
 from sanic.router import Router
 from sanic.server.websockets.impl import ConnectionClosed
-from sanic.signals import Event, Signal, SignalRouter
+from sanic.signals import Event, Signal, SignalRouter, SignalSender
 from sanic.touchup import TouchUp, TouchUpMeta
 from sanic.types.shared_ctx import SharedContext
 from sanic.worker.inspector import Inspector
@@ -639,6 +639,7 @@ class Sanic(
                 condition=signal.condition,
                 exclusive=signal.exclusive,
                 priority=signal.priority,
+                require_sender=signal.require_sender,
             )
 
     @overload
@@ -651,6 +652,7 @@ class Sanic(
         fail_not_found: bool = True,
         inline: Literal[True],
         reverse: bool = False,
+        sender: SignalSender | None = None,
     ) -> Coroutine[Any, Any, Awaitable[Any]]: ...
 
     @overload
@@ -663,6 +665,7 @@ class Sanic(
         fail_not_found: bool = True,
         inline: Literal[False] = False,
         reverse: bool = False,
+        sender: SignalSender | None = None,
     ) -> Coroutine[Any, Any, Awaitable[Task]]: ...
 
     def dispatch(
@@ -674,6 +677,7 @@ class Sanic(
         fail_not_found: bool = True,
         inline: bool = False,
         reverse: bool = False,
+        sender: SignalSender | None = None,
     ) -> Coroutine[Any, Any, Awaitable[Task | Any]]:
         """Dispatches an event to the signal router.
 
@@ -688,6 +692,10 @@ class Sanic(
                 returns a `Task`. Default is `False`.
             reverse (bool): Whether to reverse the dispatch order.
                 Default is `False`.
+            sender (Optional[SignalSender]): An app-issued sender capability
+                (see `create_signal_sender`). Required when the matched
+                handlers were registered with `require_sender=True`.
+                Default is `None`.
 
         Returns:
             Coroutine[Any, Any, Awaitable[Union[Task, Any]]]: An awaitable
@@ -716,7 +724,24 @@ class Sanic(
             inline=inline,
             reverse=reverse,
             fail_not_found=fail_not_found,
+            sender=sender,
         )
+
+    def create_signal_sender(self, name: str = "") -> SignalSender:
+        """Establish a sender capability for dispatching protected signals.
+
+        The returned `SignalSender` can be shared with trusted extensions so
+        they may dispatch signals whose handlers were registered with
+        `require_sender=True`. Dispatches of those signals without a valid
+        sender are rejected before any protected handler executes.
+
+        Args:
+            name (str): An optional label to identify the sender.
+
+        Returns:
+            SignalSender: The capability to pass as `sender` when dispatching.
+        """
+        return self.signal_router.create_sender(name=name)
 
     async def event(
         self,

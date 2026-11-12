@@ -477,6 +477,7 @@ class Blueprint(BaseSanic):
                     future.condition,
                     False,
                     future.priority,
+                    future.require_sender,
                 )
             )
 

@@ -12,7 +12,7 @@ from sanic_routing import BaseRouter, Route, RouteGroup
 from sanic_routing.exceptions import NotFound
 from sanic_routing.utils import path_to_parts
 
-from sanic.exceptions import InvalidSignal
+from sanic.exceptions import InvalidSignal, UnauthorizedSignal
 from sanic.log import error_logger, logger
 from sanic.models.handler_types import SignalHandler
 
@@ -83,6 +83,38 @@ GENERIC_SIGNAL_FORMAT = "__generic__.__signal__.%s"
 def _blank(): ...
 
 
+class SignalSender:
+    """An app-issued capability that authorizes dispatching protected signals.
+
+    Instances are established by the application through
+    `SignalRouter.create_sender()` (or `Sanic.create_signal_sender()`)
+    and handed out to trusted parties. Holding a `SignalSender` is what
+    authorizes a dispatch of a signal registered with
+    `require_sender=True`; merely knowing the signal name is not enough.
+
+    This is a cooperation-based control between first-party extensions.
+    It is not a sandbox and cannot isolate arbitrary malicious Python
+    code running in the same process.
+    """
+
+    __slots__ = ("_router", "name")
+
+    def __init__(self, router: SignalRouter, name: str = "") -> None:
+        self._router = router
+        self.name = name
+
+    async def dispatch(
+        self,
+        event: str | Enum,
+        **kwargs: Any,
+    ) -> asyncio.Task | Any:
+        """Dispatch a signal with this sender's capability attached."""
+        return await self._router.dispatch(event, sender=self, **kwargs)
+
+    def __repr__(self) -> str:
+        return f"SignalSender({self.name!r})"
+
+
 class Signal(Route):
     """A `Route` that is used to dispatch signals to handlers"""
 
@@ -136,6 +168,25 @@ class SignalRouter(BaseRouter):
         )
         self.allow_fail_builtin = True
         self.ctx.loop = None
+        self.ctx.senders: set[SignalSender] = set()
+
+    def create_sender(self, name: str = "") -> SignalSender:
+        """Establish a new sender capability for this application's router.
+
+        Args:
+            name (str, optional): A label to identify the sender.
+
+        Returns:
+            SignalSender: The capability that authorizes dispatching
+                signals registered with `require_sender=True`.
+        """
+        sender = SignalSender(self, name=name)
+        self.ctx.senders.add(sender)
+        return sender
+
+    def is_authorized_sender(self, sender: SignalSender | None) -> bool:
+        """Check whether a sender capability was issued by this router."""
+        return sender is not None and sender in self.ctx.senders
 
     @staticmethod
     def format_event(event: str | Enum) -> str:
@@ -209,6 +260,7 @@ class SignalRouter(BaseRouter):
         condition: dict[str, str] | None = None,
         fail_not_found: bool = True,
         reverse: bool = False,
+        sender: SignalSender | None = None,
     ) -> Any:
         event = self.format_event(event)
         try:
@@ -229,26 +281,42 @@ class SignalRouter(BaseRouter):
         signals = group.routes
         if not reverse:
             signals = signals[::-1]
+
+        executable = [
+            signal
+            for signal in signals
+            if (
+                (condition is None and signal.ctx.exclusive is False)
+                or (condition is None and not signal.extra.requirements)
+                or (condition == signal.extra.requirements)
+            )
+            and (signal.ctx.trigger or event == signal.ctx.definition)
+        ]
+        authorized = self.is_authorized_sender(sender)
+        if not authorized and any(
+            signal.ctx.require_sender for signal in executable
+        ):
+            raise UnauthorizedSignal(
+                "Cannot dispatch protected signal without an app-issued "
+                f"sender: {event}"
+            )
+
         try:
             for signal in signals:
+                if signal.ctx.require_sender and not authorized:
+                    continue
                 for waiter in signal.ctx.waiters:
                     if waiter.matches(event, condition):
                         waiter.future.set_result(dict(params))
 
-            for signal in signals:
-                requirements = signal.extra.requirements
-                if (
-                    (condition is None and signal.ctx.exclusive is False)
-                    or (condition is None and not requirements)
-                    or (condition == requirements)
-                ) and (signal.ctx.trigger or event == signal.ctx.definition):
-                    maybe_coroutine = signal.handler(**params)
-                    if isawaitable(maybe_coroutine):
-                        retval = await maybe_coroutine
-                        if retval:
-                            return retval
-                    elif maybe_coroutine:
-                        return maybe_coroutine
+            for signal in executable:
+                maybe_coroutine = signal.handler(**params)
+                if isawaitable(maybe_coroutine):
+                    retval = await maybe_coroutine
+                    if retval:
+                        return retval
+                elif maybe_coroutine:
+                    return maybe_coroutine
             return None
         except Exception as e:
             if self.ctx.app.debug and self.ctx.app.state.verbosity >= 1:
@@ -271,6 +339,7 @@ class SignalRouter(BaseRouter):
         fail_not_found: bool = True,
         inline: bool = False,
         reverse: bool = False,
+        sender: SignalSender | None = None,
     ) -> asyncio.Task | Any:
         """Dispatch a signal to all handlers that match the event
 
@@ -281,12 +350,14 @@ class SignalRouter(BaseRouter):
             fail_not_found (bool, optional): Whether to raise an exception if no handlers are found. Defaults to `True`.
             inline (bool, optional): Whether to run the handlers inline. An inline run means it will return the value of the signal handler. When `False` (which is the default) the signal handler will run in a background task. Defaults to `False`.
             reverse (bool, optional): Whether to run the handlers in reverse order. Defaults to `False`.
+            sender (Optional[SignalSender], optional): An app-issued sender capability. Required to dispatch signals whose handlers were registered with `require_sender=True`. Defaults to `None`.
 
         Returns:
             Union[asyncio.Task, Any]: If `inline` is `True` then the return value of the signal handler will be returned. If `inline` is `False` then an `asyncio.Task` will be returned.
 
         Raises:
             RuntimeError: If the signal is dispatched outside of an event loop
+            UnauthorizedSignal: If a matched handler requires a sender capability and none (or an unrecognized one) was provided
         """  # noqa: E501
 
         event = self.format_event(event)
@@ -296,6 +367,7 @@ class SignalRouter(BaseRouter):
             condition=condition,
             fail_not_found=fail_not_found and inline,
             reverse=reverse,
+            sender=sender,
         )
         logger.debug(f"Dispatching signal: {event}", extra={"verbosity": 1})
 
@@ -350,6 +422,7 @@ class SignalRouter(BaseRouter):
         exclusive: bool = True,
         *,
         priority: int = 0,
+        require_sender: bool = False,
     ) -> Signal:
         event_definition = self.format_event(event)
         name, trigger, event_string = self._get_event_parts(event_definition)
@@ -365,6 +438,7 @@ class SignalRouter(BaseRouter):
         signal.ctx.exclusive = exclusive
         signal.ctx.trigger = trigger
         signal.ctx.definition = event_definition
+        signal.ctx.require_sender = require_sender
         signal.extra.requirements = condition
 
         return cast(Signal, signal)

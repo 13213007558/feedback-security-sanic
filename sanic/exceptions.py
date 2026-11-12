@@ -671,6 +671,11 @@ class InvalidSignal(SanicException):
     """Exception raised when an invalid signal is sent."""
 
 
+class UnauthorizedSignal(SanicException):
+    """Exception raised when a signal is dispatched without the
+    app-issued sender capability required by a protected handler."""
+
+
 class WebsocketClosed(SanicException):
     """Exception raised when a websocket is closed."""
 

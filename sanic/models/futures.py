@@ -70,6 +70,7 @@ class FutureSignal(NamedTuple):
     condition: dict[str, str] | None
     exclusive: bool
     priority: int
+    require_sender: bool = False
 
 
 class FutureRegistry(set): ...

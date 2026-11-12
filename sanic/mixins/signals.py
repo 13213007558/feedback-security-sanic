@@ -26,6 +26,7 @@ class SignalMixin(metaclass=SanicMeta):
         condition: dict[str, Any] | None = None,
         exclusive: bool = True,
         priority: int = 0,
+        require_sender: bool = False,
     ) -> Callable[[SignalHandler], SignalHandler]:
         """
         For creating a signal handler, used similar to a route handler:
@@ -47,6 +48,10 @@ class SignalMixin(metaclass=SanicMeta):
             be dispatched either with or without it. *THIS IS INAPPLICABLE TO
             BLUEPRINT SIGNALS. THEY ARE ALWAYS NON-EXCLUSIVE*, defaults
             to ``True``
+        :param require_sender: When ``True``, the handler will only run when
+            the dispatch carries an app-issued sender capability (see
+            ``Sanic.create_signal_sender``). Dispatches without one are
+            rejected before the handler executes, defaults to ``False``
         :type condition: Dict[str, Any], optional
         """
         event_value = str(event.value) if isinstance(event, Enum) else event
@@ -58,6 +63,7 @@ class SignalMixin(metaclass=SanicMeta):
                 HashableDict(condition or {}),
                 exclusive,
                 priority,
+                require_sender,
             )
             self._future_signals.add(future_signal)
 
@@ -74,6 +80,7 @@ class SignalMixin(metaclass=SanicMeta):
         event: str | Enum,
         condition: dict[str, Any] | None = None,
         exclusive: bool = True,
+        require_sender: bool = False,
     ) -> Callable[..., Any]:
         """Registers a signal handler for a specific event.
 
@@ -88,6 +95,8 @@ class SignalMixin(metaclass=SanicMeta):
                 `condition` has been met. *This is inapplicable to blueprint
                 signals, which are **ALWAYS** non-exclusive.* Defaults
                 to `True`.
+            require_sender (bool): Whether or not the handler requires an
+                app-issued sender capability on dispatch. Defaults to `False`.
 
         Returns:
             Callable[..., Any]: The handler that was registered.
@@ -97,9 +106,12 @@ class SignalMixin(metaclass=SanicMeta):
             async def noop(**context): ...
 
             handler = noop
-        self.signal(event=event, condition=condition, exclusive=exclusive)(
-            handler
-        )
+        self.signal(
+            event=event,
+            condition=condition,
+            exclusive=exclusive,
+            require_sender=require_sender,
+        )(handler)
         return handler
 
     def event(self, event: str):
