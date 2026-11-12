@@ -1431,6 +1431,8 @@ class Sanic(
             await self.handle_exception(
                 request, e, run_middleware=run_middleware
             )
+        finally:
+            await request.run_finalizers()
 
     async def _websocket_handler(
         self, handler, request, *args, subprotocols=None, **kwargs

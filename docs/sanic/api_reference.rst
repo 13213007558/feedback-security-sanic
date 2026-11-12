@@ -8,6 +8,7 @@
    api/blueprints
    api/core
    api/exceptions
+   api/extensions
    api/router
    api/server
    api/utility

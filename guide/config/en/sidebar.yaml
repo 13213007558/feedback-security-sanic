@@ -43,6 +43,8 @@ root:
                   path: guide/advanced/versioning.html
                 - label: Signals
                   path: guide/advanced/signals.html
+                - label: Tenant Leases
+                  path: guide/advanced/tenancy.html
                 - label: Custom CLI Commands
                   path: guide/advanced/commands.html
           - label: Best Practices

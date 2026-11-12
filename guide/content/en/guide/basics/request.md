@@ -159,6 +159,10 @@ The `request.ctx` object is your playground to store whatever information you ne
 
 This can be constrasted with the `app.ctx` object which is shared across all requests. Be careful not to confuse them! 
 
+.. warning::
+
+    Do not bind request identity by overwriting a field on a shared object in `app.ctx`. If a handler awaits, another request can overwrite that field and the first request will continue with the wrong identity. Use [tenant leases](/en/guide/advanced/tenancy) (or a `contextvars.ContextVar`) to freeze request-owned identity, and keep only the physical resource shared.
+
 The `request.ctx` object by default is a `SimpleNamespace` object allowing you to set arbitrary attributes on it. Sanic will not use this object for anything, so you are free to use it however you want without worrying about name clashes.
 
 ### Typical use case

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from asyncio import BaseProtocol
 from collections import defaultdict
 from contextvars import ContextVar
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Generic,
     cast,
 )
@@ -104,6 +107,7 @@ class Request(Generic[sanic_type, ctx_type]):
         "__weakref__",
         "_cookies",
         "_ctx",
+        "_finalizers",
         "_id",
         "_ip",
         "_parsed_url",
@@ -178,6 +182,7 @@ class Request(Generic[sanic_type, ctx_type]):
         self.body = b""
         self.conn_info: ConnInfo | None = None
         self._ctx: ctx_type | None = None
+        self._finalizers: list[Callable[[], Any]] = []
         self.parsed_accept: AcceptList | None = None
         self.parsed_args: defaultdict[
             tuple[bool, bool, str, str], RequestParameters
@@ -412,6 +417,56 @@ class Request(Generic[sanic_type, ctx_type]):
             )
         self.responded = True
         return response
+
+    def add_finalizer(self, finalizer: Callable[[], Any]) -> None:
+        """Register a callback to run when this request's lifecycle ends.
+
+        Finalizers are invoked exactly once, in LIFO order, after the
+        response has been sent or the request has failed/was cancelled.
+        Both synchronous and asynchronous callables are supported. An
+        exception raised by a finalizer is logged and does not affect the
+        other finalizers or the request itself.
+
+        This is primarily useful for extensions that bind request-scoped
+        state to a shared object (for example a lease acquired from an
+        application-level cache) and must guarantee it is returned even
+        when the handler raises or the request is cancelled.
+
+        Args:
+            finalizer (Callable[[], Any]): The callback to run at the end
+                of the request lifecycle.
+        """
+        self._finalizers.append(finalizer)
+
+    def clear_finalizers(self) -> list[Callable[[], Any]]:
+        """Remove and return all pending finalizers.
+
+        Returns:
+            list[Callable[[], Any]]: The previously registered finalizers.
+        """
+        finalizers, self._finalizers = self._finalizers, []
+        return finalizers
+
+    async def run_finalizers(self) -> None:
+        """Run, and clear, all pending finalizers in LIFO order.
+
+        Awaitables returned by a finalizer are awaited before the next
+        finalizer runs. Non-cancellation errors are logged so that cleanup
+        failures do not mask the original request outcome, and remaining
+        finalizers are still attempted. A ``CancelledError`` raised during
+        cleanup is propagated.
+        """
+        for finalizer in reversed(self.clear_finalizers()):
+            try:
+                result = finalizer()
+                if isawaitable(result):
+                    await result
+            except BaseException as e:
+                if isinstance(e, asyncio.CancelledError):
+                    raise
+                error_logger.exception(
+                    "Exception occurred while running request finalizer"
+                )
 
     async def receive_body(self):
         """Receive request.body, if not already received.
