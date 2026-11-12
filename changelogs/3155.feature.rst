@@ -1,0 +1,6 @@
+Add a trusted internal request correlation key (`Request.internal_id`) that is
+independent from the client supplied request ID, expose the bounded external ID
+as `Request.external_id` (see new `REQUEST_ID_MAX_LENGTH` setting), and stamp
+both values onto Sanic log records so middleware, exception handling, streaming
+responses, and derived tasks share one audit key without inheriting it across
+requests.

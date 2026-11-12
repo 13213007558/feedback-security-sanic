@@ -19,6 +19,10 @@ from sanic.http.constants import Stage
 from sanic.http.stream import Stream
 from sanic.http.tls.context import CertSelector, SanicSSLContext
 from sanic.log import Colors, logger
+from sanic.logging.context import (
+    bind_request_audit,
+    reset_request_audit,
+)
 from sanic.models.protocol_types import TransportProtocol
 from sanic.models.server_types import ConnInfo
 
@@ -107,27 +111,33 @@ class HTTPReceiver(Receiver, Stream):
         """Handle the request and response cycle."""
         self.stage = Stage.HANDLER
         self.head_only = self.request.method.upper() == "HEAD"
+        audit_token = bind_request_audit(
+            self.request.internal_id, self.request.external_id
+        )
 
-        if exception:
-            logger.info(  # no cov
-                f"{Colors.BLUE}[exception]: "
-                f"{Colors.RED}{exception}{Colors.END}",
-                exc_info=True,
-                extra={"verbosity": 1},
-            )
-            await self.error_response(exception)
-        else:
-            try:
+        try:
+            if exception:
                 logger.info(  # no cov
-                    f"{Colors.BLUE}[request]:{Colors.END} {self.request}",
+                    f"{Colors.BLUE}[exception]: "
+                    f"{Colors.RED}{exception}{Colors.END}",
+                    exc_info=True,
                     extra={"verbosity": 1},
                 )
-                await self.protocol.request_handler(self.request)
-            except Exception as e:  # no cov
-                # This should largely be handled within the request handler.
-                # But, just in case...
-                await self.run(e)
-        self.stage = Stage.IDLE
+                await self.error_response(exception)
+            else:
+                try:
+                    logger.info(  # no cov
+                        f"{Colors.BLUE}[request]:{Colors.END} {self.request}",
+                        extra={"verbosity": 1},
+                    )
+                    await self.protocol.request_handler(self.request)
+                except Exception as e:  # no cov
+                    # This should largely be handled within the request
+                    # handler. But, just in case...
+                    await self.run(e)
+            self.stage = Stage.IDLE
+        finally:
+            reset_request_audit(audit_token)
 
     async def error_response(self, exception: Exception) -> None:
         """Handle response when exception encountered"""

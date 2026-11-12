@@ -170,6 +170,17 @@ Sanic has special handling for proxy headers. See the [proxy headers](../advance
     ABCDEF12345679
     ```
 
+.. tip:: FYI
+
+    `request.id` reflects client supplied or generated input and is not a
+    trusted audit identity. For audit correlation use `request.internal_id`
+    (a server generated key that is unique per request) and
+    `request.external_id` (the bounded client header value). The length limit
+    is controlled by `REQUEST_ID_MAX_LENGTH` (default `64`), and control
+    characters are stripped from the external value before it reaches logs.
+    Sanic attaches both values to log records as `internal_request_id` and
+    `external_request_id`.
+
 ## Response
 
 Sanic will automatically set the following response headers (when appropriate) for you:

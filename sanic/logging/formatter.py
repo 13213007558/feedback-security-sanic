@@ -24,6 +24,9 @@ DEFAULT_FIELDS = set(
     "message",
     "asctime",
     "right",
+    "internal_request_id",
+    "external_request_id",
+    "request_correlation_id",
 }
 
 
@@ -214,7 +217,8 @@ class AutoAccessFormatter(AutoFormatter):
     MESSAGE_FORMAT = (
         f"{c.PURPLE}%(host)s "
         f"{c.BLUE + c.BOLD}%(request)s{c.END} "
-        f"%(right)s%(status)s %(byte)s {c.GREY}%(duration)s{c.END}"
+        f"%(right)s%(status)s %(byte)s {c.GREY}%(duration)s"
+        f" {c.YELLOW}%(request_correlation_id)s{c.END}"
     )
 
     def format(self, record: logging.LogRecord) -> str:
@@ -226,6 +230,8 @@ class AutoAccessFormatter(AutoFormatter):
             if self.ATTY
             else ""
         )
+        if not hasattr(record, "request_correlation_id"):
+            record.request_correlation_id = "-"
         return super().format(record)
 
     def _set_levelname(self, record: logging.LogRecord) -> None:
@@ -255,7 +261,10 @@ class LegacyAccessFormatter(AutoAccessFormatter):
     """
 
     PREFIX_FORMAT = "%(asctime)s - (%(name)s)[%(levelname)s][%(host)s]: "
-    MESSAGE_FORMAT = "%(request)s %(message)s %(status)s %(byte)s"
+    MESSAGE_FORMAT = (
+        "%(request)s %(message)s %(status)s %(byte)s "
+        "%(request_correlation_id)s"
+    )
 
 
 class DebugAccessFormatter(AutoAccessFormatter):
@@ -275,7 +284,8 @@ class ProdAccessFormatter(AutoAccessFormatter):
     MESSAGE_FORMAT = (
         f"{c.PURPLE}%(host)s {c.BLUE + c.BOLD}"
         f"%(request)s{c.END} "
-        f"%(right)s%(status)s %(byte)s {c.GREY}%(duration)s{c.END}"
+        f"%(right)s%(status)s %(byte)s {c.GREY}%(duration)s"
+        f" {c.YELLOW}%(request_correlation_id)s{c.END}"
     )
     LOG_EXTRA = False
 
@@ -313,6 +323,8 @@ class JSONFormatter(AutoFormatter):
         "module",
         "filename",
         "lineno",
+        "internal_request_id",
+        "external_request_id",
     ]
 
     dumps = json_dumps
@@ -375,6 +387,8 @@ class JSONAccessFormatter(JSONFormatter):
         "status",
         "byte",
         "duration",
+        "internal_request_id",
+        "external_request_id",
     ]
 
     def to_dict(self, record: logging.LogRecord) -> dict:

@@ -15,6 +15,7 @@ from websockets.typing import Subprotocol
 
 from sanic.exceptions import SanicException
 from sanic.log import access_logger, websockets_logger
+from sanic.logging.context import audit_scope
 from sanic.request import Request
 from sanic.server import HttpProtocol
 
@@ -227,4 +228,9 @@ class WebSocketProtocol(HttpProtocol):
             "request": f" 🔌 {self.websocket_url}",
             "duration": "",
         }
-        access_logger.info(message, extra=extra)
+        request = self._http.request if self._http else None
+        if request is None:
+            access_logger.info(message, extra=extra)
+        else:
+            with audit_scope(request.internal_id, request.external_id):
+                access_logger.info(message, extra=extra)

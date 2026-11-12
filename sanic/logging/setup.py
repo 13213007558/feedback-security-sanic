@@ -9,6 +9,10 @@ from sanic.log import (
     server_logger,
     websockets_logger,
 )
+from sanic.logging.filter import (
+    install_handler_audit_filters,
+    install_request_audit_filter,
+)
 from sanic.logging.formatter import (
     AutoAccessFormatter,
     AutoFormatter,
@@ -24,6 +28,17 @@ def setup_logging(
     no_color: bool = False,
     log_extra: bool | Default = _default,
 ) -> None:
+    for lggr in (
+        logger,
+        server_logger,
+        error_logger,
+        websockets_logger,
+        access_logger,
+    ):
+        install_request_audit_filter(lggr)
+
+    install_handler_audit_filters()
+
     if AutoFormatter.SETUP:
         return
 

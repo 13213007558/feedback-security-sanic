@@ -24,6 +24,11 @@ from sanic.helpers import has_message_body
 from sanic.http.constants import Stage
 from sanic.http.stream import Stream
 from sanic.log import access_logger, error_logger, logger
+from sanic.logging.context import (
+    audit_scope,
+    bind_request_audit,
+    reset_request_audit,
+)
 from sanic.touchup import TouchUpMeta
 
 
@@ -72,6 +77,7 @@ class Http(Stream, metaclass=TouchUpMeta):
         "response_bytes_left",
         "upgrade_websocket",
         "perft0",
+        "_audit_token",
     ]
 
     def __init__(self, protocol):
@@ -82,6 +88,7 @@ class Http(Stream, metaclass=TouchUpMeta):
         self.keep_alive = True
         self.stage: Stage = Stage.IDLE
         self.dispatch = self.protocol.app.dispatch
+        self._audit_token = None
 
     def init_for_request(self):
         """Init/reset all per-request variables."""
@@ -97,6 +104,13 @@ class Http(Stream, metaclass=TouchUpMeta):
         self.upgrade_websocket = False
         self.url = None
         self.perft0 = None
+        self._audit_token = None
+
+    def _reset_audit(self) -> None:
+        """Drop the audit context so the next request cannot inherit it."""
+        if self._audit_token is not None:
+            reset_request_audit(self._audit_token)
+            self._audit_token = None
 
     def __bool__(self):
         """Test if request handling is in progress"""
@@ -107,73 +121,79 @@ class Http(Stream, metaclass=TouchUpMeta):
         # Handle requests while the connection stays reusable
         while self.keep_alive and self.stage is Stage.IDLE:
             self.init_for_request()
-            # Wait for incoming bytes (in IDLE stage)
-            if not self.recv_buffer:
-                await self._receive_more()
-            self.stage = Stage.REQUEST
             try:
-                # Receive and handle a request
-                self.response_func = self.http1_response_header
+                await self._http1_request()
+            finally:
+                self._reset_audit()
 
-                await self.http1_request_header()
+    async def _http1_request(self):
+        """Run a single request/response cycle on this connection."""
+        if not self.recv_buffer:
+            await self._receive_more()
+        self.stage = Stage.REQUEST
+        try:
+            # Receive and handle a request
+            self.response_func = self.http1_response_header
 
-                self.stage = Stage.HANDLER
-                self.perft0 = perf_counter()
-                self.request.conn_info = self.protocol.conn_info
-                await self.protocol.request_handler(self.request)
+            await self.http1_request_header()
 
-                # Handler finished, response should've been sent
-                if self.stage is Stage.HANDLER and not self.upgrade_websocket:
-                    raise ServerError("Handler produced no response")
+            self.stage = Stage.HANDLER
+            self.perft0 = perf_counter()
+            self.request.conn_info = self.protocol.conn_info
+            await self.protocol.request_handler(self.request)
 
-                if self.stage is Stage.RESPONSE:
-                    await self.response.send(end_stream=True)
-            except CancelledError as exc:
-                # Write an appropriate response before exiting
-                if not self.protocol.transport:
-                    logger.info(
-                        f"Request: {self.request.method} {self.request.url} "
-                        "stopped. Transport is closed."
-                    )
-                    return
-                e = (
-                    RequestCancelled()
-                    if self.protocol.conn_info.lost
-                    else (self.exception or exc)
+            # Handler finished, response should've been sent
+            if self.stage is Stage.HANDLER and not self.upgrade_websocket:
+                raise ServerError("Handler produced no response")
+
+            if self.stage is Stage.RESPONSE:
+                await self.response.send(end_stream=True)
+        except CancelledError as exc:
+            # Write an appropriate response before exiting
+            if not self.protocol.transport:
+                logger.info(
+                    f"Request: {self.request.method} {self.request.url} "
+                    "stopped. Transport is closed."
                 )
-                self.exception = None
+                return
+            e = (
+                RequestCancelled()
+                if self.protocol.conn_info.lost
+                else (self.exception or exc)
+            )
+            self.exception = None
+            self.keep_alive = False
+            await self.error_response(e)
+        except Exception as e:
+            # Write an error response
+            await self.error_response(e)
+
+        # Try to consume any remaining request body
+        if self.request_body:
+            if self.response and 200 <= self.response.status < 300:
+                error_logger.error(f"{self.request} body not consumed.")
+            # Limit the size because the handler may have set it infinite
+            self.request_max_size = min(
+                self.request_max_size, self.protocol.request_max_size
+            )
+            try:
+                async for _ in self:
+                    pass
+            except (BadRequest, PayloadTooLarge):
+                # The remaining body was malformed (e.g. a chunked
+                # trailer, which must never be reparsed as a smuggled
+                # request) or too large. Drop the connection. This little
+                # delay allows clients to push a small request into
+                # network buffers before we close the socket, so that
+                # they are then able to read the response.
+                await sleep(0.001)
                 self.keep_alive = False
-                await self.error_response(e)
-            except Exception as e:
-                # Write an error response
-                await self.error_response(e)
 
-            # Try to consume any remaining request body
-            if self.request_body:
-                if self.response and 200 <= self.response.status < 300:
-                    error_logger.error(f"{self.request} body not consumed.")
-                # Limit the size because the handler may have set it infinite
-                self.request_max_size = min(
-                    self.request_max_size, self.protocol.request_max_size
-                )
-                try:
-                    async for _ in self:
-                        pass
-                except (BadRequest, PayloadTooLarge):
-                    # The remaining body was malformed (e.g. a chunked
-                    # trailer, which must never be reparsed as a smuggled
-                    # request) or too large. Drop the connection. This little
-                    # delay allows clients to push a small request into
-                    # network buffers before we close the socket, so that
-                    # they are then able to read the response.
-                    await sleep(0.001)
-                    self.keep_alive = False
-
-            # Clean up to free memory and for the next request
-            if self.request:
-                self.request.stream = None
-                if self.response:
-                    self.response.stream = None
+        # Clean up to free memory and for the next request
+        if self.request:
+            self.request.stream = None
+            if self.response:
+                self.response.stream = None
 
     async def http1_request_header(self):  # no cov
         """Receive and parse request header into self.request."""
@@ -259,6 +279,9 @@ class Http(Stream, metaclass=TouchUpMeta):
             app=self.protocol.app,
         )
         self.protocol.request_class._current.set(request)
+        self._audit_token = bind_request_audit(
+            request.internal_id, request.external_id
+        )
         await self.dispatch(
             "http.lifecycle.request",
             inline=True,
@@ -469,6 +492,10 @@ class Http(Stream, metaclass=TouchUpMeta):
             app=self.protocol.app,
         )
         self.request.stream = self
+        if self._audit_token is None:
+            self._audit_token = bind_request_audit(
+                self.request.internal_id, self.request.external_id
+            )
 
     def log_response(self) -> None:
         """Helper method provided to enable the logging of responses in case if the `HttpProtocol.access_log` is enabled."""  # noqa: E501
@@ -489,7 +516,8 @@ class Http(Stream, metaclass=TouchUpMeta):
         if ip := req.client_ip:
             extra["host"] = f"{ip}:{req.port}"
         extra["request"] = f"{req.method} {req.url}"
-        access_logger.info("", extra=extra)
+        with audit_scope(req.internal_id, req.external_id):
+            access_logger.info("", extra=extra)
 
     # Request methods
 

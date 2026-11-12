@@ -9,6 +9,10 @@ from sanic.exceptions import BadRequest, ServerError
 from sanic.helpers import Default
 from sanic.http import Stage
 from sanic.log import error_logger, logger
+from sanic.logging.context import (
+    bind_request_audit,
+    reset_request_audit,
+)
 from sanic.models.asgi import ASGIReceive, ASGIScope, ASGISend, MockTransport
 from sanic.request import Request
 from sanic.response import BaseHTTPResponse
@@ -112,6 +116,7 @@ class ASGIApp:
     ws: WebSocketConnection | None
     stage: Stage
     response: BaseHTTPResponse | None
+    audit_token: object | None
 
     @classmethod
     async def create(
@@ -128,6 +133,7 @@ class ASGIApp:
         instance.transport.loop = sanic_app.loop
         instance.stage = Stage.IDLE
         instance.response = None
+        instance.audit_token = None
         instance.sanic_app.state.is_started = True
         setattr(instance.transport, "add_task", sanic_app.loop.create_task)
 
@@ -176,16 +182,24 @@ class ASGIApp:
             sanic_app,
         )
         request_class._current.set(instance.request)
+        instance.audit_token = bind_request_audit(
+            instance.request.internal_id, instance.request.external_id
+        )
         instance.request.stream = instance  # type: ignore
         instance.request_body = True
         instance.request.conn_info = ConnInfo(instance.transport)
 
-        await instance.sanic_app.dispatch(
-            "http.lifecycle.request",
-            inline=True,
-            context={"request": instance.request},
-            fail_not_found=False,
-        )
+        try:
+            await instance.sanic_app.dispatch(
+                "http.lifecycle.request",
+                inline=True,
+                context={"request": instance.request},
+                fail_not_found=False,
+            )
+        except BaseException:
+            reset_request_audit(instance.audit_token)
+            instance.audit_token = None
+            raise
 
         return instance
 
@@ -261,3 +275,7 @@ class ASGIApp:
                 await self.sanic_app.handle_exception(self.request, e)
             except Exception as exc:
                 await self.sanic_app.handle_exception(self.request, exc, False)
+        finally:
+            if self.audit_token is not None:
+                reset_request_audit(self.audit_token)
+                self.audit_token = None

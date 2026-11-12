@@ -29,6 +29,7 @@ from sanic.log import (
     logger,
     websockets_logger,
 )
+from sanic.logging.context import audit_scope
 from sanic.models.server_types import ConnInfo
 from sanic.request import Request
 from sanic.server.protocols.base_protocol import SanicProtocol
@@ -203,7 +204,10 @@ class HttpProtocol(HttpProtocolMixin, SanicProtocol, metaclass=TouchUpMeta):
             if ip := req.client_ip:
                 extra["host"] = f"{ip}:{req.port}"
             extra["request"] = f"{req.method} {req.url}"
-        access_logger.info("", extra=extra)
+            with audit_scope(req.internal_id, req.external_id):
+                access_logger.info("", extra=extra)
+        else:
+            access_logger.info("", extra=extra)
 
     def check_timeouts(self):
         """

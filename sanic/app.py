@@ -60,8 +60,19 @@ from sanic.exceptions import (
 from sanic.handlers import ErrorHandler
 from sanic.helpers import Default, _default
 from sanic.http import Stage
-from sanic.log import LOGGING_CONFIG_DEFAULTS, error_logger, logger
+from sanic.log import (
+    LOGGING_CONFIG_DEFAULTS,
+    access_logger,
+    error_logger,
+    logger,
+    server_logger,
+    websockets_logger,
+)
 from sanic.logging.deprecation import deprecation
+from sanic.logging.filter import (
+    install_handler_audit_filters,
+    install_request_audit_filter,
+)
 from sanic.logging.setup import setup_logging
 from sanic.middleware import Middleware, MiddlewareLocation
 from sanic.mixins.commands import CommandMixin
@@ -104,6 +115,25 @@ if OS_IS_WINDOWS:  # no cov
 
 ctx_type = TypeVar("ctx_type")
 config_type = TypeVar("config_type", bound=Config)
+
+
+def _ensure_audit_filters() -> None:
+    """Re-install trusted audit filters after logging is configured.
+
+    A user supplied ``log_config`` may omit filters, so installing them again
+    here guarantees that access and error records always carry the internal
+    request correlation key.
+    """
+
+    for log in (
+        logger,
+        error_logger,
+        access_logger,
+        server_logger,
+        websockets_logger,
+    ):
+        install_request_audit_filter(log)
+    install_handler_audit_filters()
 
 
 class Sanic(
@@ -332,6 +362,7 @@ class Sanic(
         if configure_logging:
             dict_config = log_config or LOGGING_CONFIG_DEFAULTS
             logging.config.dictConfig(dict_config)  # type: ignore
+            _ensure_audit_filters()
 
         if config and env_prefix != SANIC_PREFIX:
             raise SanicException(

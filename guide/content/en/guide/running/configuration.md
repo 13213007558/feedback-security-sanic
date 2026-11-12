@@ -286,6 +286,7 @@ If a value cannot be cast, it will default to a `str`.
 | REGISTER                  | True             | Whether the app registry should be enabled                                                                                            |
 | REQUEST_BUFFER_SIZE       | 65536            | Request buffer size before request is paused, default is 64 Kib                                                                       |
 | REQUEST_ID_HEADER         | X-Request-ID     | The name of "X-Request-ID" HTTP header that contains request/correlation ID                                                           |
+| REQUEST_ID_MAX_LENGTH     | 64               | Maximum length retained for an external request ID; longer values are truncated for logs                                              |
 | REQUEST_MAX_SIZE          | 100000000        | How big a request may be (bytes), default is 100 megabytes                                                                            |
 | REQUEST_MAX_HEADER_SIZE   | 8192            | How big a request header may be (bytes), default is 8192 bytes                                                                         |
 | REQUEST_TIMEOUT           | 60               | How long a request can take to arrive (sec)                                                                                           |
