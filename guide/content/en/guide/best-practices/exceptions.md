@@ -576,3 +576,41 @@ print("Caught exception:", exception)
 
 *Added in v23.6*
 
+
+
+## Safe error projection
+
+When an exception carries sensitive details (database errors, tokens, internal hostnames), the default error pages can expose more than clients should see. The `sanic.security` package provides a drop-in error handler that centralizes the *public projection* of every exception while keeping a redacted copy for your logs.
+
+The public response contains only four pieces of information:
+
+- a fixed, coarse error `category` (for example `bad_request` or `internal_error`), never the original exception class
+- a generic, non-revealing `message`
+- the HTTP `status` code
+- an unguessable `trace_id`, also returned in the `X-Error-Trace` header
+
+The original exception text, type and traceback are never placed on a response. They are redacted and written to the `sanic.error` logger under the same `trace_id`, so support teams can still reconstruct the cause chain.
+
+```python
+from sanic import Sanic
+from sanic.security import SafeErrorHandler, attach_outer_guard
+
+app = Sanic("example", error_handler=SafeErrorHandler())
+attach_outer_guard(app)
+```
+
+`SafeErrorHandler` honors content negotiation for HTML, JSON and plain text, and applies the same projection in debug mode, so exception `repr` values cannot leak through a debug fallback. `attach_outer_guard` registers a dedicated handler for failures of the projection machinery itself; if the policy breaks, clients still receive a constant `500` body carrying a fresh trace id rather than a framework page containing exception data.
+
+You can map your own exception types onto the safe category vocabulary:
+
+```python
+from sanic.security import ErrorCategory, ExceptionClassifier, SafeErrorHandler
+
+class AccountLocked(Exception):
+    pass
+
+classifier = ExceptionClassifier(
+    {AccountLocked: ErrorCategory.FORBIDDEN}
+)
+app = Sanic("example", error_handler=SafeErrorHandler(classifier=classifier))
+```

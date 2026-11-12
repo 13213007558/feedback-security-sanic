@@ -1218,7 +1218,20 @@ class Sanic(
                 if isawaitable(response):
                     response = await response
             except Exception as e:
-                if isinstance(e, SanicException):
+                from sanic.security.errors import SafetyPolicyError
+                from sanic.security.handler import SafeErrorHandler
+                from sanic.security.tracing import TRACE_HEADER
+
+                safe_handler = isinstance(
+                    self.error_handler, SafeErrorHandler
+                )
+                if isinstance(e, SafetyPolicyError) and safe_handler:
+                    # The projection policy itself failed. Emit the constant
+                    # safety response instead of any exception-derived text.
+                    response = self.error_handler.safe_failure_response(
+                        request, e
+                    )
+                elif isinstance(e, SanicException):
                     response = self.error_handler.default(request, e)
                 elif self.debug:
                     response = HTTPResponse(
@@ -1232,6 +1245,16 @@ class Sanic(
                     response = HTTPResponse(
                         "An error occurred while handling an error", status=500
                     )
+                # Even on the last-resort branches, attach a correlation id
+                # when a safe handler is in place so the failure is locatable
+                # without exposing any exception data in the body.
+                if safe_handler and TRACE_HEADER not in response.headers:
+                    try:
+                        from sanic.security.tracing import trace_id_for
+
+                        response.headers[TRACE_HEADER] = trace_id_for(request)
+                    except Exception:  # pragma: no cover
+                        pass
         if response is not None:
             try:
                 request.reset_response()
