@@ -33,6 +33,8 @@ root:
             items:
                 - label: Class Based Views
                   path: guide/advanced/class-based-views.html
+                - label: Client Certificates
+                  path: guide/advanced/client-certificates.html
                 - label: Proxy Configuration
                   path: guide/advanced/proxy-headers.html
                 - label: Streaming

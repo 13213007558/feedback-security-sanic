@@ -30,6 +30,7 @@ class ConnInfo:
         "ssl",
         "cert",
         "network_paths",
+        "peer_cert",
     )
 
     def __init__(self, transport: TransportProtocol, unix=None):
@@ -43,6 +44,7 @@ class ConnInfo:
         self.ssl = False
         self.server_name = ""
         self.cert: dict[str, Any] = {}
+        self.peer_cert: SSLObject | None = None
         self.network_paths: list[Any] = []
         sslobj: SSLObject | None = transport.get_extra_info("ssl_object")  # type: ignore
         sslctx: SSLContext | None = transport.get_extra_info("ssl_context")  # type: ignore
@@ -50,6 +52,7 @@ class ConnInfo:
             self.ssl = True
             self.server_name = getattr(sslobj, "sanic_server_name", None) or ""
             self.cert = dict(getattr(sslobj.context, "sanic", {}))
+            self.peer_cert = sslobj
         if sslctx and not self.cert:
             self.cert = dict(getattr(sslctx, "sanic", {}))
         if isinstance(addr, str):  # UNIX socket
